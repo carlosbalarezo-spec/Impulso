@@ -1,4 +1,4 @@
-import { Candidate, EditorialPackage, EditorialBrief, ScriptSet, ScriptSetVariant, OverlayPlan, ApprovalChecklist, ComplianceResult } from '../db';
+import { Candidate, EditorialPackage, EditorialBrief, ScriptSet, ScriptSetVariant, OverlayPlan, ApprovalChecklist, ComplianceResult, SourceCitation } from '../db';
 import { checkScriptCompliance } from '../compliance';
 
 // Helper to parse script parts from a single text block
@@ -14,6 +14,72 @@ function parseScriptPart(text: string, marker: string, nextMarkers: string[]): s
     }
   }
   return text.substring(start, end).trim();
+}
+
+
+function buildSourceCitation(candidate: Candidate): SourceCitation {
+  const rawSourceName = candidate.sourceName || candidate.source || "Fuente no especificada";
+  const sourceName = rawSourceName.replace(/^\[MOCK\]\s*/i, "").trim() || "Fuente no especificada";
+  const sourceUrl = candidate.sourceUrl || candidate.realSourceUrl || undefined;
+  const sourceType = candidate.dataType || (candidate.isMock ? "MOCK" : undefined);
+  const verificationStatus = candidate.verificationStatus;
+
+  const isMock =
+    verificationStatus === "mock" ||
+    candidate.dataType === "MOCK" ||
+    candidate.dataType === "MOCK_DERIVED_FROM_PUBLIC_CONTEXT" ||
+    candidate.isMock === true ||
+    /^\[MOCK\]/i.test(candidate.source || "");
+
+  const isManual =
+    candidate.dataType === "MANUAL_URL" ||
+    verificationStatus === "needs_review";
+
+  if (isMock) {
+    return {
+      sourceName,
+      sourceUrl,
+      sourceType,
+      verificationStatus,
+      narrativeCitation: "Según una fuente simulada de prueba, ",
+      overlayCitation: `Fuente simulada: [MOCK] ${sourceName}`
+    };
+  }
+
+  if (isManual) {
+    return {
+      sourceName,
+      sourceUrl,
+      sourceType,
+      verificationStatus,
+      narrativeCitation: "Según una fuente manual pendiente de revisión, ",
+      overlayCitation: "Fuente manual: pendiente de revisión"
+    };
+  }
+
+  return {
+    sourceName,
+    sourceUrl,
+    sourceType,
+    verificationStatus,
+    narrativeCitation: `Según ${sourceName}, `,
+    overlayCitation: `Fuente: ${sourceName}`
+  };
+}
+
+function withNarrativeCitation(context: string, sourceCitation: SourceCitation): string {
+  const cleanContext = context.trim();
+  const cleanCitation = sourceCitation.narrativeCitation.trim();
+
+  if (!cleanContext) {
+    return sourceCitation.narrativeCitation.trim();
+  }
+
+  if (cleanContext.includes(cleanCitation)) {
+    return cleanContext;
+  }
+
+  return `${sourceCitation.narrativeCitation}${cleanContext}`;
 }
 
 export function generateEditorialPackage(candidate: Candidate): EditorialPackage {
@@ -32,6 +98,8 @@ export function generateEditorialPackage(candidate: Candidate): EditorialPackage
     complianceNote: candidate.editorialCard?.complianceNote || "Evitar realizar diagnósticos médicos clínicos o usar calificativos peyorativos sobre el atleta."
   };
 
+  const sourceCitation = buildSourceCitation(candidate);
+
   // 2. Scripts (s30, s60, s90)
   const parseScriptVariant = (text: string, lengthType: '30' | '60' | '90'): ScriptSetVariant => {
     if (!text) {
@@ -41,7 +109,7 @@ export function generateEditorialPackage(candidate: Candidate): EditorialPackage
       if (candidate.language === 'EN') {
         return {
           hook: `What does the case of ${titleClean} teach us about pressure?`,
-          context: `Recently, it was reported that ${candidate.summary}`,
+          context: withNarrativeCitation(`Recently, it was reported that ${candidate.summary}`, sourceCitation),
           centralComment: `This highlights the intense psychological pressure and the importance of a healthier sports culture.`,
           example: `As shown in the news, high performance is unsustainable without proper mental support.`,
           closure: `Mental health in sports is not a luxury, it's a requirement for long-term success.`,
@@ -54,7 +122,7 @@ export function generateEditorialPackage(candidate: Candidate): EditorialPackage
       } else if (candidate.language === 'DE') {
         return {
           hook: `Was können wir aus dem Fall ${titleClean} lernen?`,
-          context: `Kürzlich wurde berichtet, dass ${candidate.summary}`,
+          context: withNarrativeCitation(`Kürzlich wurde berichtet, dass ${candidate.summary}`, sourceCitation),
           centralComment: `Dies zeigt den enormen psychologischen Druck und die Bedeutung einer gesünderen Sportkultur.`,
           example: `Wie die Nachrichten zeigen, ist Spitzenleistung ohne mentale Unterstützung nicht nachhaltig.`,
           closure: `Mentale Gesundheit im Sport ist kein Luxus, sondern eine Notwendigkeit für langfristigen Erfolg.`,
@@ -67,7 +135,7 @@ export function generateEditorialPackage(candidate: Candidate): EditorialPackage
       } else {
         return {
           hook: `¿Qué nos enseña el caso de ${titleClean}?`,
-          context: `Recientemente se dio a conocer que ${candidate.summary}`,
+          context: withNarrativeCitation(`Recientemente se dio a conocer que ${candidate.summary}`, sourceCitation),
           centralComment: `Esto demuestra la presión psicológica y la necesidad de una gestión deportiva más empática.`,
           example: `Como vemos en la noticia, el rendimiento óptimo no ocurre sin una estabilidad mental previa.`,
           closure: `La salud mental en el deporte no es un lujo, es una necesidad de rendimiento.`,
@@ -91,7 +159,7 @@ export function generateEditorialPackage(candidate: Candidate): EditorialPackage
 
     return {
       hook: hook || `Análisis de ${lengthType}s sobre este caso.`,
-      context: context,
+      context: withNarrativeCitation(context, sourceCitation),
       centralComment: centralComment || text,
       example: example || "Como vemos en este caso deportivo.",
       closure: closure,
@@ -114,7 +182,7 @@ export function generateEditorialPackage(candidate: Candidate): EditorialPackage
     format: "9:16",
     salvadorPosition: candidate.overlayPlan?.salvadorPosition || "Centro inferior",
     visibleTitle: candidate.overlayPlan?.headline || candidate.title || "Titular",
-    visibleSource: candidate.overlayPlan?.sourceCitation || candidate.source || "Fuente",
+    visibleSource: sourceCitation.overlayCitation,
     largeText: candidate.overlayPlan?.largeText || "SALUD MENTAL = RENDIMIENTO",
     emphasisMoments: (candidate.overlayPlan?.timeline || [
       { time: "0:00", action: "Mostrar Salvador e introducir el titular de prensa." },
@@ -136,7 +204,10 @@ export function generateEditorialPackage(candidate: Candidate): EditorialPackage
     noThirdPartyVideoDownloaded: false,
     noFullArticleCopied: false,
     ownStancePresent: false,
-    humanReviewPending: false
+    humanReviewPending: false,
+    sourceCitedInNarrative: false,
+    sourceCitedInOverlay: false,
+    sourceUrlAvailable: Boolean(candidate.sourceUrl || candidate.realSourceUrl)
   };
 
   // 5. Compliance check (run on scripts and candidate fields)
@@ -170,7 +241,8 @@ export function generateEditorialPackage(candidate: Candidate): EditorialPackage
     scripts,
     overlayPlan,
     approvalChecklist,
-    complianceResult
+    complianceResult,
+    sourceCitation
   };
 }
 
@@ -182,7 +254,44 @@ export function validatePackageApproval(pkg: EditorialPackage, candidate: Candid
     reasons.push(...pkg.complianceResult.reasons);
   }
 
-  // 2. Candidate verification status is needs_review
+  // 2. Citación doble obligatoria
+  const citation = pkg.sourceCitation;
+  if (!citation) {
+    reasons.push("Falta la estructura sourceCitation en el paquete editorial.");
+  } else {
+    if (!citation.narrativeCitation || citation.narrativeCitation.trim() === "") {
+      reasons.push("Falta la citación de fuente en la narrativa hablada del guion.");
+    }
+    if (!citation.overlayCitation || citation.overlayCitation.trim() === "") {
+      reasons.push("Falta la citación de fuente como texto visible en pantalla.");
+    }
+  }
+
+  if (pkg.approvalChecklist.sourceCitedInNarrative !== true) {
+    reasons.push("El check crítico 'Fuente citada en narrativa hablada' no está completado.");
+  }
+  if (pkg.approvalChecklist.sourceCitedInOverlay !== true) {
+    reasons.push("El check crítico 'Fuente citada en overlay visible' no está completado.");
+  }
+  if (pkg.approvalChecklist.sourceUrlAvailable !== true) {
+    reasons.push("El check crítico 'URL o fuente original disponible para auditoría' no está completado.");
+  }
+
+  const isMockSource =
+    candidate.verificationStatus === "mock" ||
+    candidate.dataType === "MOCK" ||
+    candidate.dataType === "MOCK_DERIVED_FROM_PUBLIC_CONTEXT" ||
+    candidate.isMock === true ||
+    /^\[MOCK\]/i.test(candidate.source || "");
+
+  if (isMockSource) {
+    const overlayCitation = citation?.overlayCitation || "";
+    if (!overlayCitation.includes("Fuente simulada") && !overlayCitation.includes("[MOCK]")) {
+      reasons.push("La fuente simulada debe estar marcada como 'Fuente simulada' o '[MOCK]' en el overlay.");
+    }
+  }
+
+  // 3. Candidate verification status is needs_review
   if (candidate.verificationStatus === 'needs_review') {
     reasons.push("El candidato requiere revisión de verificación de fuente (verificationStatus es 'needs_review').");
   }
@@ -199,7 +308,7 @@ export function validatePackageApproval(pkg: EditorialPackage, candidate: Candid
 
   // 5. Menor involucrado y no está activado modo sensible
   const minorTags = ["menor", "menor de edad", "niño", "niña", "infantil", "child", "minor", "kid", "adolescente", "hijo", "hija"];
-  const hasTag = candidate.tags.some(t => minorTags.some(mt => t.toLowerCase().includes(mt)));
+  const hasTag = (candidate.tags || []).some(t => minorTags.some(mt => t.toLowerCase().includes(mt)));
   const hasPenalty = candidate.penalties?.hasMinorWithoutFocus === true;
   const textToScan = `${candidate.title} ${candidate.summary}`.toLowerCase();
   const hasText = minorTags.some(mt => textToScan.includes(mt));

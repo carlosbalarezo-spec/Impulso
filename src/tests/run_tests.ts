@@ -299,7 +299,7 @@ test("Compliance - Escaneo de candidato completo", () => {
 // EDITORIAL PACKAGE TESTS (packageGenerator.ts)
 // ==========================================================
 import { generateEditorialPackage, validatePackageApproval } from '../lib/editorial/packageGenerator';
-import { Candidate } from '../lib/db';
+import { Candidate, ApprovalChecklist } from '../lib/db';
 
 function createTestCandidate(overrides: Partial<Candidate>): Candidate {
   const base: Candidate = {
@@ -359,6 +359,25 @@ function createTestCandidate(overrides: Partial<Candidate>): Candidate {
   return merged;
 }
 
+function createApprovedChecklist(overrides: Partial<ApprovalChecklist> = {}): ApprovalChecklist {
+  return {
+    sourceVisible: true,
+    urlSaved: true,
+    noClinicalDiagnosis: true,
+    noMockery: true,
+    noMinorExposed: true,
+    noPrivateContent: true,
+    noThirdPartyVideoDownloaded: true,
+    noFullArticleCopied: true,
+    ownStancePresent: true,
+    humanReviewPending: true,
+    sourceCitedInNarrative: true,
+    sourceCitedInOverlay: true,
+    sourceUrlAvailable: true,
+    ...overrides
+  };
+}
+
 test("Editorial - Generación de paquete desde mock", () => {
   const mockCand = createTestCandidate({ id: "mock-1" });
   const pkg = generateEditorialPackage(mockCand);
@@ -367,9 +386,96 @@ test("Editorial - Generación de paquete desde mock", () => {
   assert.strictEqual(pkg.status, "draft");
   assert.strictEqual(pkg.editorialBrief.summary, "Resumen editorial mock");
   assert.strictEqual(pkg.scripts.s30.hook, "Biles pressure.");
-  assert.strictEqual(pkg.scripts.s60.context, "En Tokio.");
+  assert.strictEqual(pkg.scripts.s60.context, "Según una fuente simulada de prueba, En Tokio.");
+  assert.strictEqual(pkg.sourceCitation.overlayCitation, "Fuente simulada: [MOCK] BBC Sport");
   assert.strictEqual(pkg.scripts.s90.cta, "Comenta abajo.");
   assert.strictEqual(pkg.overlayPlan.format, "9:16");
+});
+
+test("Editorial - Fuente narrativa incluida en paquete generado", () => {
+  const realCand = createTestCandidate({
+    id: "real-source-citation",
+    title: "Noticia limpia de Simone Biles",
+    source: "BBC Sport",
+    sourceName: "BBC Sport",
+    isMock: false,
+    dataType: "REAL_SOURCE",
+    verificationStatus: "source_verified"
+  });
+  const pkg = generateEditorialPackage(realCand);
+  assert.strictEqual(pkg.sourceCitation.narrativeCitation, "Según BBC Sport, ");
+  assert.ok(pkg.scripts.s30.context.startsWith("Según BBC Sport, "));
+  assert.ok(pkg.scripts.s60.context.startsWith("Según BBC Sport, "));
+  assert.ok(pkg.scripts.s90.context.startsWith("Según BBC Sport, "));
+});
+
+test("Editorial - Fuente overlay incluida en paquete generado", () => {
+  const realCand = createTestCandidate({
+    id: "real-overlay-citation",
+    title: "Noticia limpia de Simone Biles",
+    source: "BBC Sport",
+    sourceName: "BBC Sport",
+    isMock: false,
+    dataType: "REAL_SOURCE",
+    verificationStatus: "source_verified"
+  });
+  const pkg = generateEditorialPackage(realCand);
+  assert.strictEqual(pkg.sourceCitation.overlayCitation, "Fuente: BBC Sport");
+  assert.strictEqual(pkg.overlayPlan.visibleSource, "Fuente: BBC Sport");
+});
+
+test("Editorial - Mock queda marcado como fuente simulada", () => {
+  const mockCand = createTestCandidate({
+    id: "mock-citation",
+    source: "[MOCK] BBC Sport",
+    sourceName: "BBC Sport",
+    isMock: true,
+    dataType: "MOCK",
+    verificationStatus: "mock"
+  });
+  const pkg = generateEditorialPackage(mockCand);
+  assert.ok(pkg.sourceCitation.narrativeCitation.includes("fuente simulada"));
+  assert.ok(pkg.sourceCitation.overlayCitation.includes("Fuente simulada"));
+  assert.ok(pkg.sourceCitation.overlayCitation.includes("[MOCK]"));
+});
+
+test("Editorial - Bloqueo si falta check de citación narrativa u overlay", () => {
+  const realCand = createTestCandidate({
+    id: "real-missing-double-citation-check",
+    title: "Noticia limpia de Simone Biles",
+    source: "BBC Sport",
+    sourceName: "BBC Sport",
+    isMock: false,
+    dataType: "REAL_SOURCE",
+    verificationStatus: "source_verified"
+  });
+  const pkg = generateEditorialPackage(realCand);
+  pkg.approvalChecklist = createApprovedChecklist({
+    sourceCitedInNarrative: false,
+    sourceCitedInOverlay: false
+  });
+
+  const val = validatePackageApproval(pkg, realCand);
+  assert.strictEqual(val.approved, false);
+  assert.ok(val.reasons.some(r => r.includes("narrativa hablada")));
+  assert.ok(val.reasons.some(r => r.includes("overlay visible")));
+});
+
+test("Editorial - Aprobación exitosa exige citación doble", () => {
+  const realCand = createTestCandidate({
+    id: "real-double-citation-ok",
+    title: "Noticia limpia de Simone Biles",
+    source: "BBC Sport",
+    sourceName: "BBC Sport",
+    isMock: false,
+    dataType: "REAL_SOURCE",
+    verificationStatus: "source_verified"
+  });
+  const pkg = generateEditorialPackage(realCand);
+  pkg.approvalChecklist = createApprovedChecklist();
+
+  const val = validatePackageApproval(pkg, realCand);
+  assert.strictEqual(val.approved, true);
 });
 
 test("Editorial - Bloqueo de aprobación por checklist crítico incompleto", () => {
@@ -395,18 +501,7 @@ test("Editorial - Bloqueo de aprobación por compliance", () => {
   });
 
   const pkg = generateEditorialPackage(mockCand);
-  pkg.approvalChecklist = {
-    sourceVisible: true,
-    urlSaved: true,
-    noClinicalDiagnosis: true,
-    noMockery: true,
-    noMinorExposed: true,
-    noPrivateContent: true,
-    noThirdPartyVideoDownloaded: true,
-    noFullArticleCopied: true,
-    ownStancePresent: true,
-    humanReviewPending: true
-  };
+  pkg.approvalChecklist = createApprovedChecklist();
 
   const val = validatePackageApproval(pkg, mockCand);
   assert.strictEqual(val.approved, false, "Debería estar bloqueado por compliance");
@@ -424,18 +519,7 @@ test("Editorial - Bloqueo de aprobación por needs_review", () => {
   });
 
   const pkg = generateEditorialPackage(mockCand);
-  pkg.approvalChecklist = {
-    sourceVisible: true,
-    urlSaved: true,
-    noClinicalDiagnosis: true,
-    noMockery: true,
-    noMinorExposed: true,
-    noPrivateContent: true,
-    noThirdPartyVideoDownloaded: true,
-    noFullArticleCopied: true,
-    ownStancePresent: true,
-    humanReviewPending: true
-  };
+  pkg.approvalChecklist = createApprovedChecklist();
 
   const val = validatePackageApproval(pkg, mockCand);
   assert.strictEqual(val.approved, false);
@@ -453,18 +537,7 @@ test("Editorial - Bloqueo de aprobación por MANUAL_URL sin revisión", () => {
   });
 
   const pkg = generateEditorialPackage(mockCand);
-  pkg.approvalChecklist = {
-    sourceVisible: true,
-    urlSaved: true,
-    noClinicalDiagnosis: true,
-    noMockery: true,
-    noMinorExposed: true,
-    noPrivateContent: true,
-    noThirdPartyVideoDownloaded: true,
-    noFullArticleCopied: true,
-    ownStancePresent: true,
-    humanReviewPending: true
-  };
+  pkg.approvalChecklist = createApprovedChecklist();
 
   const val = validatePackageApproval(pkg, mockCand);
   assert.strictEqual(val.approved, false);
@@ -482,18 +555,7 @@ test("Editorial - Bloqueo de aprobación por falta de sourceUrl", () => {
   });
 
   const pkg = generateEditorialPackage(mockCand);
-  pkg.approvalChecklist = {
-    sourceVisible: true,
-    urlSaved: true,
-    noClinicalDiagnosis: true,
-    noMockery: true,
-    noMinorExposed: true,
-    noPrivateContent: true,
-    noThirdPartyVideoDownloaded: true,
-    noFullArticleCopied: true,
-    ownStancePresent: true,
-    humanReviewPending: true
-  };
+  pkg.approvalChecklist = createApprovedChecklist();
 
   const val = validatePackageApproval(pkg, mockCand);
   assert.strictEqual(val.approved, false);
@@ -511,18 +573,7 @@ test("Editorial - Menor involucrado y no está activado modo sensible", () => {
   });
 
   const pkg = generateEditorialPackage(mockCand);
-  pkg.approvalChecklist = {
-    sourceVisible: true,
-    urlSaved: true,
-    noClinicalDiagnosis: true,
-    noMockery: true,
-    noMinorExposed: false,
-    noPrivateContent: true,
-    noThirdPartyVideoDownloaded: true,
-    noFullArticleCopied: true,
-    ownStancePresent: true,
-    humanReviewPending: true
-  };
+  pkg.approvalChecklist = createApprovedChecklist({ noMinorExposed: false });
 
   const val = validatePackageApproval(pkg, mockCand);
   assert.strictEqual(val.approved, false, "Debería bloquear por menor de edad involucrado sin check");
@@ -539,18 +590,7 @@ test("Editorial - Aprobación exitosa con todo en regla", () => {
   });
 
   const pkg = generateEditorialPackage(mockCand);
-  pkg.approvalChecklist = {
-    sourceVisible: true,
-    urlSaved: true,
-    noClinicalDiagnosis: true,
-    noMockery: true,
-    noMinorExposed: true,
-    noPrivateContent: true,
-    noThirdPartyVideoDownloaded: true,
-    noFullArticleCopied: true,
-    ownStancePresent: true,
-    humanReviewPending: true
-  };
+  pkg.approvalChecklist = createApprovedChecklist();
 
   const val = validatePackageApproval(pkg, mockCand);
   assert.strictEqual(val.approved, true);

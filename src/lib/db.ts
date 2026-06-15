@@ -5,6 +5,15 @@ import { calculateRanking, RankingCriteria, Penalties, RankingResult } from './r
 export type CandidateDataType = "MOCK" | "MOCK_DERIVED_FROM_PUBLIC_CONTEXT" | "REAL_SOURCE" | "MANUAL_URL";
 export type VerificationStatus = "mock" | "unverified" | "source_verified" | "needs_review";
 
+export interface SourceCitation {
+  sourceName: string;
+  sourceUrl?: string;
+  sourceType?: string;
+  verificationStatus: VerificationStatus;
+  narrativeCitation: string;
+  overlayCitation: string;
+}
+
 export interface Candidate {
   id: string;
   title: string;
@@ -154,6 +163,9 @@ export interface ApprovalChecklist {
   noFullArticleCopied: boolean;
   ownStancePresent: boolean;
   humanReviewPending: boolean;
+  sourceCitedInNarrative: boolean;
+  sourceCitedInOverlay: boolean;
+  sourceUrlAvailable: boolean;
 }
 
 export interface ComplianceResult {
@@ -172,6 +184,7 @@ export interface EditorialPackage {
   overlayPlan: OverlayPlan;
   approvalChecklist: ApprovalChecklist;
   complianceResult: ComplianceResult;
+  sourceCitation: SourceCitation;
 }
 
 interface DBData {
